@@ -21,8 +21,9 @@
 #define ACC_VALUES_BUFFER_SIZE 512
 #define SMOOTHING_BLOCK_SIZE 16
 #define GRAVITY 9.807
+#define ASSUME_ZERO_LIMIT 0.03125
 
-#define D if (1)
+#define D if (0)
 
 struct AGValues {
     struct Vector3D Acc;
@@ -56,7 +57,7 @@ float gyYError = 0.0f;
 float gyZError = 0.0f;
 
 struct Vector3D speed;
-unsigned long lastSpeedTime = 0;
+unsigned long lastCalculationTime = 0;
 struct Location lastLocation;
 
 struct AccelerationRecord* accelerationBuffer;
@@ -65,6 +66,10 @@ int accelerationValuesStored;
 char* buffer128;
 
 unsigned long lastRecordTime = 0;
+
+float assumeAsZero(float x) {
+    return (x < ASSUME_ZERO_LIMIT && x > -ASSUME_ZERO_LIMIT) ? 0 : x;
+}
 
 struct Vector3D toEarthCoords(struct Vector3D relativeCoords) {
     return toCartesian(rotateBy(toPolar(relativeCoords), orientation));
@@ -152,28 +157,63 @@ void smoothData() {
     }
 }
 
-void recalculateSpeed() {
-    if (lastSpeedTime == 0) lastSpeedTime = accelerationBuffer[0].time;
+float meterToLat(float x) { return x / 111111; }
+
+float meterToLon(float x, float lat) {
+    return x / (111111 * cos(lat * PI / 180.0));
+}
+
+void prepareAccelerationForIntegration() {
     for (int i = 0; i < ACC_VALUES_BUFFER_SIZE; i++) {
-        speed.x +=
-            GRAVITY * accelerationBuffer[i].acceleration.x *
-            (float)((long)accelerationBuffer[i].time - (long)lastSpeedTime) /
-            1000.0;
-        speed.y +=
-            GRAVITY * accelerationBuffer[i].acceleration.y *
-            (float)((long)accelerationBuffer[i].time - (long)lastSpeedTime) /
-            1000.0;
-        D Serial.printf(
-            "%f * %f * (%ld - %ld) / 1000 = %f\n", GRAVITY,
-            accelerationBuffer[i].acceleration.x, accelerationBuffer[i].time,
-            lastSpeedTime,
-            GRAVITY * accelerationBuffer[i].acceleration.y *
-                (float)(accelerationBuffer[i].time - lastSpeedTime) / 1000.0);
-        lastSpeedTime = accelerationBuffer[i].time;
+        accelerationBuffer[i].acceleration.x =
+            GRAVITY * assumeAsZero(accelerationBuffer[i].acceleration.x);
+        accelerationBuffer[i].acceleration.y =
+            GRAVITY * assumeAsZero(accelerationBuffer[i].acceleration.y);
+
+        D Serial.printf("%f,%f\n", accelerationBuffer[i].acceleration.x,
+                        accelerationBuffer[i].acceleration.y);
     }
 }
 
-void recalculatePosition() {}
+void integrateAccelerationBuffer(float x0, float y0) {
+    unsigned long lastTime = lastCalculationTime;
+    if (lastTime == 0) lastTime = accelerationBuffer[0].time;
+    float lastX = x0;
+    float lastY = y0;
+    for (int i = 0; i < ACC_VALUES_BUFFER_SIZE; i++) {
+        accelerationBuffer[i].acceleration.x =
+            lastX +
+            accelerationBuffer[i].acceleration.x *
+                (float)((long)accelerationBuffer[i].time - (long)lastTime) /
+                1000.0;
+        accelerationBuffer[i].acceleration.y =
+            lastY +
+            accelerationBuffer[i].acceleration.y *
+                (float)((long)accelerationBuffer[i].time - (long)lastTime) /
+                1000.0;
+        lastX = accelerationBuffer[i].acceleration.x;
+        lastY = accelerationBuffer[i].acceleration.y;
+        lastTime = accelerationBuffer[i].time;
+    }
+}
+
+void recalculateSpeed() {
+    prepareAccelerationForIntegration();
+    integrateAccelerationBuffer(speed.x, speed.y);
+    speed.x = accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].acceleration.x;
+    speed.y = accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].acceleration.y;
+}
+
+void recalculatePosition() {
+    integrateAccelerationBuffer(0, 0);
+    lastLocation.valid = 1;
+    lastLocation.time = accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].time;
+    lastLocation.lat += meterToLat(
+        accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].acceleration.y);
+    lastLocation.lon += meterToLon(
+        accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].acceleration.x,
+        lastLocation.lat);
+}
 
 void logAGRecord(struct AGValues agData) {
     accelerationBuffer[accelerationValuesStored].time = agData.time;
@@ -184,6 +224,8 @@ void logAGRecord(struct AGValues agData) {
         recalculateSpeed();
         if (noGPSSignal) recalculatePosition();
         accelerationValuesStored = 0;
+        lastCalculationTime =
+            accelerationBuffer[ACC_VALUES_BUFFER_SIZE - 1].time;
     }
 }
 
@@ -197,6 +239,10 @@ void calibrateDevice() {
     averages->GyX = 0;
     averages->GyY = 0;
     averages->GyZ = 0;
+
+    gyXError = 0;
+    gyYError = 0;
+    gyZError = 0;
 
     int records = 0;
     while (records < CALIBRATION_RECORDS_COUNT) {
@@ -231,7 +277,7 @@ void calibrateDevice() {
 
     lastRecordTime = 0;
     speed = {.x = 0, .y = 0, .z = 0};
-    lastSpeedTime = 0;
+    lastCalculationTime = 0;
 
     free(averages);
 }
@@ -291,7 +337,7 @@ void displayData() {
     sprintf(buffer128, "Lon %f°", lastLocation.lon);
     display.drawString(4, 28, buffer128);
 
-    D Serial.printf("Speed: [%f, %f]\n", speed.x, speed.y);
+    // D Serial.printf("Speed: [%f, %f]\n", speed.x, speed.y);
     sprintf(buffer128, "Speed: %.3f m/s", absoluteValue(speed));
     display.drawString(4, 44, buffer128);
 

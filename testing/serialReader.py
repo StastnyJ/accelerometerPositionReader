@@ -4,24 +4,12 @@ import time
 import datetime as dt
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import sys
 
-
+n = 1
+ax = None
 z1baudrate = 115200
 z1port = '/dev/ttyUSB0' 
-
-z1serial = serial.Serial(port=z1port, baudrate=z1baudrate)
-z1serial.timeout = 2
-print(z1serial.is_open)
-
-
-fig = plt.figure()
-ax = fig.add_subplot(1, 1, 1)
-bx = fig.add_subplot(1,1,1)
-cx = fig.add_subplot(1,1,1)
-
-xs = [0]
-ys = [[0],[1],[2]]
-
 
 def animate(i, xs, ys):
     size = z1serial.inWaiting()
@@ -30,24 +18,36 @@ def animate(i, xs, ys):
         vals = [x.split(',') for x in data.split("\\n") if len(x) > 0]       
         vals = vals[1:-1]
         xs += [xs[-1] + i + 1 for i in range(len(vals))]
-        for i in range(3):
+        for i in range(n):
             ys[i] += [float(v[i]) for v in vals]
-    else:
-        print('no data')
 
     xs = xs[-1000:]
     ys = [y[-1000:] for y in ys]
 
     ax.clear()
-    ax.plot(xs, ys[0])
-    ax.plot(xs, ys[1])
-    ax.plot(xs, ys[2])
+    for i in range(n):
+        ax.plot(xs, ys[i])
 
     plt.subplots_adjust(bottom=0.30)
-    # plt.ylim([-10, 10])
-    plt.ylim([-2,2])
+    plt.ylim([-10, 10])
     plt.title('Plot')
-    plt.ylabel('acceleration (multiplies of g)')
+    plt.ylabel('sensor values')
 
-ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=300)
-plt.show()
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        n = int(sys.argv[1])
+
+    z1serial = serial.Serial(port=z1port, baudrate=z1baudrate)
+    z1serial.timeout = 2
+    if not z1serial.is_open:
+        print("Fail to connect")
+        sys.exit()
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+
+    xs = [0]
+    ys = [[0] for _ in range(n)]
+
+    ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=300)
+    plt.show()
