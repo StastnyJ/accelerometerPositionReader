@@ -14,9 +14,13 @@
 
 #define CALIBRATE_INPUT 14
 #define SIMULATE_NO_GPS 13
+#define SIMULATION_LED_PIN 2
 
 #define BTN_CLICK_IDLE 200
 #define CALIBRATION_RECORDS_COUNT 1000
+#define ACC_VALUES_BUFFER_SIZE 512
+#define SMOOTHING_BLOCK_SIZE 16
+#define GRAVITY 9.807
 
 #define D if (1)
 
@@ -26,16 +30,39 @@ struct AGValues {
     unsigned long time;
 };
 
+struct Location {
+    double lon, lat;
+    unsigned long time;
+    int valid;
+};
+
+struct AccelerationRecord {
+    struct Vector3D acceleration;
+    unsigned long time;
+};
+
 TinyGPSPlus gps;
 SSD1306Wire display(0x3c, I2C_SDA, I2C_SCL);
 
 int calibrateBtnPressed = 0;
 int simulateNoGpsBtnPressed = 0;
 
+int noGPSSignal = 0;
+int simulateNOGPSSignal = 0;
+
 struct PolarVector orientation;
 float gyXError = 0.0f;
 float gyYError = 0.0f;
 float gyZError = 0.0f;
+
+struct Vector3D speed;
+unsigned long lastSpeedTime = 0;
+struct Location lastLocation;
+
+struct AccelerationRecord* accelerationBuffer;
+int accelerationValuesStored;
+
+char* buffer128;
 
 unsigned long lastRecordTime = 0;
 
@@ -83,7 +110,86 @@ void updateOrientation(struct AGValues measurement) {
     while (orientation.gamma < -PI) orientation.gamma += 2 * PI;
 }
 
+float extractX(struct AccelerationRecord r) { return r.acceleration.x; }
+float extractY(struct AccelerationRecord r) { return r.acceleration.y; }
+float extractZ(struct AccelerationRecord r) { return r.acceleration.z; }
+
+void swap(struct AccelerationRecord* v1, struct AccelerationRecord* v2) {
+    struct AccelerationRecord tmp;
+    tmp = *v1;
+    *v1 = *v2;
+    *v2 = tmp;
+}
+
+void sort(struct AccelerationRecord* vs, int length,
+          float (*keyExtractor)(struct AccelerationRecord v)) {
+    for (int i = 0; i < length - 1; i++) {
+        for (int j = 0; j < length - i - 1; j++) {
+            if (keyExtractor(vs[j]) > keyExtractor(vs[j + 1]))
+                swap(&vs[j], &vs[j + 1]);
+        }
+    }
+}
+
+float getMedian(struct AccelerationRecord* vs, int length,
+                float (*keyExtractor)(struct AccelerationRecord v)) {
+    sort(vs, length, keyExtractor);
+    return (keyExtractor(vs[length / 2 - 1]) + keyExtractor(vs[length / 2])) /
+           2.0;
+}
+
+void smoothData() {
+    for (int i = 0; i < ACC_VALUES_BUFFER_SIZE; i += SMOOTHING_BLOCK_SIZE) {
+        float medX =
+            getMedian(accelerationBuffer + i, SMOOTHING_BLOCK_SIZE, extractX);
+        float medY =
+            getMedian(accelerationBuffer + i, SMOOTHING_BLOCK_SIZE, extractY);
+        float medZ =
+            getMedian(accelerationBuffer + i, SMOOTHING_BLOCK_SIZE, extractZ);
+        for (int j = 0; j < SMOOTHING_BLOCK_SIZE; j++)
+            accelerationBuffer[i + j].acceleration = {
+                .x = medX, .y = medY, .z = medZ};
+    }
+}
+
+void recalculateSpeed() {
+    if (lastSpeedTime == 0) lastSpeedTime = accelerationBuffer[0].time;
+    for (int i = 0; i < ACC_VALUES_BUFFER_SIZE; i++) {
+        speed.x +=
+            GRAVITY * accelerationBuffer[i].acceleration.x *
+            (float)((long)accelerationBuffer[i].time - (long)lastSpeedTime) /
+            1000.0;
+        speed.y +=
+            GRAVITY * accelerationBuffer[i].acceleration.y *
+            (float)((long)accelerationBuffer[i].time - (long)lastSpeedTime) /
+            1000.0;
+        D Serial.printf(
+            "%f * %f * (%ld - %ld) / 1000 = %f\n", GRAVITY,
+            accelerationBuffer[i].acceleration.x, accelerationBuffer[i].time,
+            lastSpeedTime,
+            GRAVITY * accelerationBuffer[i].acceleration.y *
+                (float)(accelerationBuffer[i].time - lastSpeedTime) / 1000.0);
+        lastSpeedTime = accelerationBuffer[i].time;
+    }
+}
+
+void recalculatePosition() {}
+
+void logAGRecord(struct AGValues agData) {
+    accelerationBuffer[accelerationValuesStored].time = agData.time;
+    accelerationBuffer[accelerationValuesStored++].acceleration =
+        toEarthCoords(agData.Acc);
+    if (accelerationValuesStored == ACC_VALUES_BUFFER_SIZE) {
+        smoothData();
+        recalculateSpeed();
+        if (noGPSSignal) recalculatePosition();
+        accelerationValuesStored = 0;
+    }
+}
+
 void calibrateDevice() {
+    delay(1000);
+
     struct AGValues* averages =
         (struct AGValues*)malloc(sizeof(struct AGValues));
 
@@ -124,6 +230,8 @@ void calibrateDevice() {
     D Serial.println(orientation.gamma);
 
     lastRecordTime = 0;
+    speed = {.x = 0, .y = 0, .z = 0};
+    lastSpeedTime = 0;
 
     free(averages);
 }
@@ -134,6 +242,10 @@ void handleCalibrateInputClick() {
     display.drawString(0, 42, "Do not move with the device");
     display.display();
     calibrateDevice();
+}
+
+void handleSimulateNOGPClick() {
+    simulateNOGPSSignal = (simulateNOGPSSignal + 1) % 2;
 }
 
 void handleBtnInput(int pin, int* isPressed, void (*onClickHandler)()) {
@@ -148,15 +260,42 @@ void handleBtnInput(int pin, int* isPressed, void (*onClickHandler)()) {
     }
 }
 
-void displayGPSInfo() {
+struct Location readGPSData() {
+    struct Location res;
+    while (Serial1.available() > 0) {
+        if (gps.encode(Serial1.read())) {
+            if (gps.location.isValid() && !simulateNOGPSSignal) {
+                res.lat = gps.location.lat();
+                res.lon = gps.location.lng();
+                res.valid = 1;
+                res.time = millis();
+                noGPSSignal = 0;
+            } else {
+                noGPSSignal = 1;
+            }
+        }
+    }
+    return res;
+}
+
+void displayData() {
     display.clear();
-    char* buffer = (char*)malloc(32 * sizeof(buffer));
-    if (gps.location.isValid())
-        sprintf(buffer, "G: %f, %f", gps.location.lat(), gps.location.lng());
+
+    if (noGPSSignal)
+        display.drawString(4, 4, "NO GPS, approx. loc.");
     else
-        sprintf(buffer, "Invalid location");
-    display.drawString(0, 0, buffer);
-    free(buffer);
+        display.drawString(4, 4, "Your position");
+
+    sprintf(buffer128, "Lat: %f°", lastLocation.lat);
+    display.drawString(4, 16, buffer128);
+    sprintf(buffer128, "Lon %f°", lastLocation.lon);
+    display.drawString(4, 28, buffer128);
+
+    D Serial.printf("Speed: [%f, %f]\n", speed.x, speed.y);
+    sprintf(buffer128, "Speed: %.3f m/s", absoluteValue(speed));
+    display.drawString(4, 44, buffer128);
+
+    display.display();
 }
 
 void setup() {
@@ -175,6 +314,14 @@ void setup() {
 
     pinMode(CALIBRATE_INPUT, INPUT);
     pinMode(SIMULATE_NO_GPS, INPUT);
+    pinMode(SIMULATION_LED_PIN, OUTPUT);
+
+    speed = {.x = 0, .y = 0, .z = 0};
+    lastLocation = {.lon = 0, .lat = 0, .time = 0, .valid = 0};
+    buffer128 = (char*)malloc(sizeof(char) * 128);
+
+    accelerationBuffer = (struct AccelerationRecord*)malloc(
+        sizeof(AGValues) * ACC_VALUES_BUFFER_SIZE);
 
     D Serial.println(F("Board initialized"));
     D Serial.println();
@@ -183,19 +330,26 @@ void setup() {
 void loop() {
     handleBtnInput(CALIBRATE_INPUT, &calibrateBtnPressed,
                    &handleCalibrateInputClick);
+    handleBtnInput(SIMULATE_NO_GPS, &simulateNoGpsBtnPressed,
+                   &handleSimulateNOGPClick);
+    if (simulateNOGPSSignal)
+        digitalWrite(SIMULATION_LED_PIN, HIGH);
+    else
+        digitalWrite(SIMULATION_LED_PIN, LOW);
 
-    while (Serial1.available() > 0)
-        if (gps.encode(Serial1.read())) displayGPSInfo();
-
+    struct Location location = readGPSData();
     struct AGValues agData = readAGData();
-    struct Vector3D accRes = toEarthCoords(agData.Acc);
+
+    logAGRecord(agData);
+
+    if (noGPSSignal) {
+    } else {
+        lastLocation = location;
+        delay(1);
+    }
 
     if (lastRecordTime > 0) updateOrientation(agData);
     lastRecordTime = agData.time;
 
-    // D Serial.printf("%f,%f,%f\n", orientation.alpha, orientation.beta,
-    //                 orientation.gamma);
-    D Serial.printf("%f,%f,%f\n", accRes.x, accRes.y, accRes.z);
-
-    display.display();
+    displayData();
 }

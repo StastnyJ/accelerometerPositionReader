@@ -18,3 +18,4 @@ struct PolarVector getAngleDiff(struct PolarVector a, struct PolarVector b);
 struct PolarVector rotateBy(struct PolarVector v, struct PolarVector a);
 
 struct Vector3D toCartesian(struct PolarVector v);
+float absoluteValue(struct Vector3D v);

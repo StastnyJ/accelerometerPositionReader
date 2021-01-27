@@ -78,3 +78,7 @@ struct Vector3D toCartesian(struct PolarVector v) {
 
     return res;
 }
+
+float absoluteValue(struct Vector3D v) {
+    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
