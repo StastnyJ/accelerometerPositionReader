@@ -1,0 +1,1 @@
+Files utilities.h, boards.cpp and boards.h are used for setup of the board. They were copied (and slightly changed) from [https://github.com/Xinyuan-LilyGO/LilyGO-T-Beam](https://github.com/Xinyuan-LilyGO/LilyGO-T-Beam).

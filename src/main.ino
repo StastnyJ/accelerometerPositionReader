@@ -151,9 +151,12 @@ void smoothData() {
             getMedian(accelerationBuffer + i, SMOOTHING_BLOCK_SIZE, extractY);
         float medZ =
             getMedian(accelerationBuffer + i, SMOOTHING_BLOCK_SIZE, extractZ);
-        for (int j = 0; j < SMOOTHING_BLOCK_SIZE; j++)
+        for (int j = 0; j < SMOOTHING_BLOCK_SIZE; j++) {
+            D Serial.printf("%f,%f\n", accelerationBuffer[i + j].acceleration.x,
+                            medX);
             accelerationBuffer[i + j].acceleration = {
                 .x = medX, .y = medY, .z = medZ};
+        }
     }
 }
 
@@ -170,8 +173,8 @@ void prepareAccelerationForIntegration() {
         accelerationBuffer[i].acceleration.y =
             GRAVITY * assumeAsZero(accelerationBuffer[i].acceleration.y);
 
-        D Serial.printf("%f,%f\n", accelerationBuffer[i].acceleration.x,
-                        accelerationBuffer[i].acceleration.y);
+        // D Serial.printf("%f,%f\n", accelerationBuffer[i].acceleration.x,
+        //                 accelerationBuffer[i].acceleration.y);
     }
 }
 
