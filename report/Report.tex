@@ -6,8 +6,8 @@
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{fancyhdr}
-
-
+\usepackage{caption}
+\usepackage{subcaption}
 \usepackage{biblatex}
 
 \addbibresource{Report.bib}
@@ -42,24 +42,11 @@
         {\small Student number: 03729788}\\
         {\small Course: Real-time Systems [IN2060] }
         
-        \vspace{6.9cm}
+        \vspace{16cm}
         \textbf{Abstract}
     \end{center}
     % ABSTRACT
-    Submit your project report ( 5 to 10 pages per person) by the 4tth of February 2021 (channel will be
-    announced later). The report needs to contain the names of the authors, which course are they on
-    (IN2060 or IN8014) and their student number (matrikel number). You must also state that you equally
-    contributed to the project if you worked in pairs.
-    Before you do this, use the form below to register your project (very brief description required only) via
-    moodle. I will open a submission channel for this. The submission of your project registration has to take
-    place before by the 17th of December 2020.
-    You need to be prepared to give a talk about your project on the 11th of February 20201. This will
-    happen during our normal lecture time. I will randomly select several projects on the day of the
-    presentation, so you all have to be prepared to present
-    You will receive a 0.3 grade bonus on your exam (independent of the quality of you presentation) if you
-    hand in a reasonable project report (you still have to pass your exam with a grade <=4.0). If you pass the
-    exam with a 1.0 grade, the project will not further improve your grade. There is no grade for your
-    project, only a pass and fail which means you will either get the exam bonus or not.
+    In this project I have built a device that measures user's current position and speed mainly using GPS and that tries to substitute the GPS with a gyroscope and an accelerometer in case of loosing the GPS signal. In the first part I will describe the hardware, from which the device is built. In the second part I will talk about the processing of accelerometer data, reducing measurements errors and calculating final position of the device in the earth coordinates system. In the last part I will talk about the precision of the device and about the cause of the errors. 
 \end{titlepage}
 \makeatother
 
@@ -68,7 +55,9 @@
 \section{Project description}
 In this project I have built the device that shows to the user his/her current position and speed on the display in a real time. In normal case, the device is using only a GPS chip in order to get the information about the current location. But there are many cases, when we loose a GPS signal. For example inside of some buildings, between high mountains, in tunnels, etc. In these cases we want to have the device still running so we have to substitute the GPS with some another alternative that is independent on the quality of any signal. I decided for the gyroscope and accelerometer that can measure our acceleration and angular speed, which can be using double integration converted to the relative location\footnote{The location difference between our current location and location before the start of the acceleration measurement} and combined with the last location that the GPS measured before it lost signal, in order to calculate the current location. With this technique we can keep the device running and providing the output to the user for the whole time even if we do not have any signal.\par
 Besides the controller board, accelerometer, gyroscope and display, the device contains two additional buttons. One of them is used for the (re)calibration of the device (described later). The second button is present only for the testing purpose and is used for the simulation of the situation that we do not have any GPS signal. If a user presses this button, he/she turns on the testing mode so that the device does not use any information from the GPS, even if it has a GPS signal and calculates the current speed and location only using the accelerometer and gyroscope data in order to simulate and test the situation that we do not have a GPS signal. If the user presses the button again, the testing mode is turned off and the device is working normally.\par
-The device has also one additional LED, which indicates that the testing mode is turned on.
+The device has also one additional LED, which indicates that the testing mode is turned on.\\\par
+The whole project including all source codes, this report and photos is available on my github.\\
+\url{https://github.com/StastnyJ/accelerometerPositionReader}
 
 % SECTION 1: HARDWARE
 \section{Used hardware}
@@ -170,12 +159,44 @@ If I sum up all previous steps into pseudocode, it will look like this.
 
 % SECTION 3: RESULTS
 \section{Results and precision}
-\subsection{Accelerometer inaccuracy}
+Now let's talk about the results and precision I achieved with the accelerometer. To measure the precision we can define an error as a ratio
+$$
+    E = \left|\frac{p_e - p}{p_e}\right|
+$$
+where $p_e$ is the expected relative position\footnote{Measured with my phone} and $p$ is the position calculated by the device.\par
+For the quite short distances, up to 10 m, the device was working quite well, with $E < 0.1$, which corresponds to the error lower then one meter for every 10 meters.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=8cm]{img/smallDistanceError.png}
+    \caption{Device error for small distances (average from several measurements)}
+\end{figure}
+
+But if we continue with the measurement for the larger distances, from several tens to several hundred meters, we will see that the error grows exponentially and is quite soon really huge. If we recalibrate the device during measurement and than continue measuring, we will shortly stop the grow, but after a quite short while we get back to the exponential grow.\par
+\clearpage
+\begin{figure}[h]
+  \begin{subfigure}{7.5cm}
+    \includegraphics[width=7cm]{img/largeDistanceError.png}
+    \caption{Without a calibration}
+  \end{subfigure}
+  \begin{subfigure}{7cm}
+    \includegraphics[width=7cm]{img/calibrationError.png}
+    \caption{With 2 calibrations}
+  \end{subfigure}
+  \caption[Caption for LOF]{Device error tendency for larger distances\footnotemark}
+\end{figure}
+
+\footnotetext{I deliberately left out the units, because the actual number were for each measurement different, depending on how much I was accelerating, changing directions or rotating with the device, but the tendency and shape of the curve was always the same.}
+The question is why is the error growing exponentially. One reason is the double integration of the acceleration, the error of the acceleration measurement will be propagated\cite{UNCERNITY} and ends up in exponential of its value, so it has large consequences even if it is quite small. The other reason is, that the value depends on the previous results, especially on the previous velocity and if these values are wrong because of the measurement error, the next error would be larger and larger which also leads to the exponential grow of the error.\par
+But the main factor causing the error is the translation from the accelerometer coordinate system in which are the accelerations measured to the earth coordinates system. This translation depends on the knowledge of the orientation of the device, which is determined during the calibration and updated according to the data from the gyroscope, which can also be inaccurate, so after some time, we have a wrong orientation vector, which significantly increase the error of the data from the accelerometer (mainly because of the gravity vector which will be reflected also in $x$ and $y$ axes) which will lead to huge errors described in previous paragraph. The fact, that the error stop growing for a while after a recalibration also suggests that the main cause of the error is the wrong orientation.
 
 % SECTION 4: CONCLUSION
 \section{Conclusion}
+In conclusion of this project, I would say that accelerometer is not an appropriate substitution for GPS and because of the errors described in previous section, it is an inappropriate type of sensor for each application where we have to know a precise location in a different coordinates system, than the one,
+which is relative to the sensor/device. Maybe if we would combine the accelerometer with a tilt sensor or any other sensor which allows direct measuring of the orientation of the device with respect to the earth coordinates system, than it could deliver better results, but the error of using only an accelerometer with gyroscope is too large for any real application.\par
 
-
+\clearpage
+\pagenumbering{gobble}
 \nocite{ACCGyro}
 \nocite{BoardGH}
 \nocite{NMEA}
